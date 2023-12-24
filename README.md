@@ -1,0 +1,2 @@
+# NIPC
+Notifiers IPC library. 
