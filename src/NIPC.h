@@ -29,9 +29,10 @@ int nipc_subscribe(int id, long type, void (*handler)(struct nipc_message*)); //
 int nipc_send(int id, struct nipc_message msg, long type); 
 int nipc_close(int id);
 int nipc_remove(key_t _key);
+//void nipc_cow(); //TODO: do something funny
 
 //TODO: maybe add some #define constants
-
+//TODO: CV qualify these functions, make sure to update the impl file
 
 
 
