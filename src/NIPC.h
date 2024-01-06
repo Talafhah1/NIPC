@@ -23,16 +23,23 @@ struct nipc_message //TODO: nipc_message
 	char* data;
 };
 
-int nipc_create(key_t _key);
-int nipc_get(key_t _key);
-int nipc_subscribe(int id, long type, void (*handler)(struct nipc_message*)); //TODO: typedef handler
-int nipc_send(int id, struct nipc_message msg, long type); 
-int nipc_close(int id);
-int nipc_remove(key_t _key);
+typedef void (*nipc_handler_t)(struct nipc_message* const restrict);
+#define NIPC_BROADCAST 0L
+#define NIPC_UNICAST(pid) pid
+#define NIPC_MULTICAST(type) -type
+
+const int nipc_create(const key_t _key);
+const int nipc_get(const key_t _key);
+const int nipc_subscribe(const int id, const long type, nipc_handler_t handler);
+const int nipc_send(const int id, const struct nipc_message msg, const long type);
+const int nipc_close(const int id);
+const int nipc_remove(const key_t _key);
 //void nipc_cow(); //TODO: do something funny
 
+//FIXME: DELETE THIS 
+void printShit();
+
 //TODO: maybe add some #define constants
-//TODO: CV qualify these functions, make sure to update the impl file
 
 
 
