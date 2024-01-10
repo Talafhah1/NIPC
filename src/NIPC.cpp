@@ -71,16 +71,32 @@ std::unordered_map<int, std::unordered_map<pid_t, long>*> _subscription_list;
  */
 nipc_handler_t _handler;
 
-//TODO: Doc
+//TODO: if handler is null maybe read the message anyway and discard it
+/**
+ * @brief  The signal handler for `SIGUSR1`.
+ * @param  signal  {const int}  The signal number.
+ * @remark  The signal handler will allocate a buffer containing the message and call the notification handler; it is the responsibility of the notification handler to free the buffer.
+ */
 void _nipc_handler(const int signal)
 {
+	// Ensure a notification handler is set.
 	if (_handler)
 	{
+		// Allocate a buffer to store the message.
 		nipc_message* message = static_cast<nipc_message*>(malloc(sizeof(nipc_message)));
+
+		// Receive the message from the message queue.
 		msgq_buf buf;
 		msgrcv(signal, &buf, sizeof(msgq_buf), getpid(), 0);
+
+		// Copy the message from the message queue buffer to the allocated buffer.
+		*message = buf.message;
+
+		// Invoke the notification handler.
 		_handler(message);
 	}
+
+	// Return.
 	return;
 }
 
