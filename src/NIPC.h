@@ -16,13 +16,10 @@
 
 #include <sys/types.h>	// key_t
 
-// struct nipc_message //TODO: nipc_message
-// {
-// 	long type;
-// 	char* data;
-// };
-
-typedef void* nipc_message;
+struct nipc_message //TODO: nipc_message
+{
+	char data[1024];
+};
 
 typedef void (*nipc_handler_t)(nipc_message* const);
 #define NIPC_BROADCAST 0L
@@ -39,3 +36,4 @@ const int nipc_remove(const key_t _key);
 
 #endif  // NIPC_H
 // End of src/NIPC.h
+  

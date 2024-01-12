@@ -31,11 +31,23 @@
 struct msgq_buf
 {
 	/**
-	 * @name  pid
+	 * @name  receiver
 	 * @brief  The PID of the process that will receive the message.
 	 * @remark  This corresponds to the `type` parameter of `msgsnd()`.  Here, the message queue type is abstracted an inbox for each process.
 	 */
-	long pid;
+	long receiver;
+
+	/**
+	 * @name  channel
+	 * @brief  The channel on which to send the message.
+	 */
+	long channel;
+
+	/**
+	 * @name  sender
+	 * @brief  The PID of the process that sent the message.
+	 */
+	pid_t sender;
 
 	/**
 	 * @name  message
@@ -47,15 +59,17 @@ struct msgq_buf
 	 * @name msgq_buf()
 	 * @brief  Constructs a new empty message queue buffer.
 	 */
-	msgq_buf() : pid(0), message(nullptr) {}
+	msgq_buf() : receiver(0), channel(0), sender(0), message({}) {}
 
 	/**
 	 * @name  msgq_buf()
-	 * @brief  Constructs a new message queue buffer with the provided PID and message.
-	 * @param  _pid  {const long}  The PID of the process that will receive the message.
+	 * @brief  Constructs a new message queue buffer with the provided data.
+	 * @param  _receiver  {const long}  The PID of the process that will receive the message.
+	 * @param  _channel  {const long}  The channel on which to send the message.
+	 * @param  _sender  {const pid_t}  The PID of the process that sent the message.
 	 * @param  _message  {const nipc_message}  The message to send to the process.
 	 */
-	msgq_buf(const long _pid, const nipc_message _message) : pid(_pid), message(_message) {}
+	msgq_buf(const long _receiver, const long _channel, const pid_t _sender, const nipc_message _message) : receiver(_receiver), channel(_channel), sender(_sender), message(_message) {}
 };
 
 /**
@@ -69,9 +83,8 @@ std::unordered_map<int, std::unordered_map<pid_t, long>*> _subscription_list;
  * @name  _handler
  * @brief  The function handler to invoke upon any notification from the NIPC instance.
  */
-nipc_handler_t _handler;
+nipc_handler_t _handler = nullptr;
 
-//TODO: if handler is null maybe read the message anyway and discard it
 /**
  * @brief  The signal handler for `SIGUSR1`.
  * @param  signal  {const int}  The signal number.
@@ -79,22 +92,24 @@ nipc_handler_t _handler;
  */
 void _nipc_handler(const int signal)
 {
-	// Ensure a notification handler is set.
-	if (_handler)
-	{
-		// Allocate a buffer to store the message.
-		nipc_message* message = static_cast<nipc_message*>(malloc(sizeof(nipc_message)));
+	// Allocate a buffer to store the message.
+	nipc_message* message = static_cast<nipc_message*>(malloc(sizeof(nipc_message)));
 
-		// Receive the message from the message queue.
-		msgq_buf buf;
-		msgrcv(signal, &buf, sizeof(msgq_buf), getpid(), 0);
+	// Receive the message from the message queue.
+	msgq_buf buf;
 
-		// Copy the message from the message queue buffer to the allocated buffer.
-		*message = buf.message;
+	// Iterate over all NICPs in the subscription list.
+	// Once a message is read, break out of the loop.
+	for (const std::pair<const int, std::unordered_map<int, long>*>& pair : _subscription_list) if (msgrcv(pair.first, &buf, sizeof(msgq_buf), getpid(), IPC_NOWAIT) != -1) break;
 
-		// Invoke the notification handler.
-		_handler(message);
-	}
+	// Copy the message from the message queue buffer to the allocated buffer.
+	*message = buf.message;
+
+	// Ensure a notification handler is set and invoke it.
+	if (_handler) _handler(message);
+
+	// If the message wasn't delivered discard the message.
+	else free(message);
 
 	// Return.
 	return;
@@ -131,6 +146,7 @@ const int nipc_create(const key_t _key)
 	return 0;
 }
 
+//TODO: what happens if you fork a child
 /**
  * @name  nipc_get()
  * @brief  Opens a NIPC instance whose key is `_key`.
@@ -179,9 +195,6 @@ const int nipc_subscribe(const int id, const long type, nipc_handler_t handler)
 	// Processes must subscribe to a valid channel.
 	else if (type <= 0) { errno = EINVAL; return -1; } //TODO: ensure that this is the correct error code
 
-	//TODO: possibly allow this
-	else if (handler == nullptr) { errno = EINVAL; return -1; } //TODO: ensure that this is the correct error code
-
 	// Admit the process to the NIPC instance.
 	(*_subscription_list[id])[getpid()] = type;
 
@@ -207,9 +220,6 @@ const int nipc_send(const int id, const nipc_message msg, const long type)
 	// Ensure that the NIPC instance exists and the process called `nipc_get()` for this NIPC instance.
 	if (_subscription_list.find(id) == _subscription_list.end()) { errno = ENOENT; return -1; } //TODO: ensure that this is the correct error code
 
-	// Ensure that the message is valid.
-	else if (msg == nullptr) { errno = EINVAL; return -1; } //TODO: ensure that this is the correct error code
-
 	// Instantiate a buffer to hold the PIDs of all processes to receive this message. 
 	std::vector<pid_t> mailing_list = {};
 
@@ -219,7 +229,7 @@ const int nipc_send(const int id, const nipc_message msg, const long type)
 
 	// Multicast the message to all subscribers of a multicast channel.
 	// Iterate over the subscription list and add the PIDs of all subscribers whose channel ID matches `type` to the mailing list.
-	else if (type < 0) { for (const auto& pair : *_subscription_list[id]) if (pair.second == -type) mailing_list.push_back(pair.first); }
+	else if (type < 0) { for (const std::pair<const int, long>& pair : *_subscription_list[id]) if (pair.second == -type) mailing_list.push_back(pair.first); }
 
 	// Unicast the message to a specific subscriber process.
 	// Ensure that the process is a subscriber of the NIPC instance.
@@ -232,7 +242,7 @@ const int nipc_send(const int id, const nipc_message msg, const long type)
 	for (const pid_t& pid : mailing_list)
 	{
 		// Create a message queue buffer to store the message and the PID of the process to receive the message.
-		msgq_buf buf(pid, msg);
+		msgq_buf buf(pid, type, getpid(), msg);
 
 		// Send the message to the process's inbox.
 		if (msgsnd(id, &buf, sizeof(msgq_buf), 0) == -1) { errno = ENOMEM; return -1; } //TODO: ensure that this is the correct error code
