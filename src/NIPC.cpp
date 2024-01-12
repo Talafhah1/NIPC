@@ -1,6 +1,7 @@
-// TODO: for returns with error codes make sure to mention all possible err nos in the docs, use the @throws or @exception doxygen directives
+//TODO: for returns with error codes make sure to mention all possible err nos in the docs, use the @throws or @exception doxygen directives
 //TODO: comment verboseness
 //TODO: local variable docs
+//TODO: mutex everything that is shared
 
 // src/NIPC.cpp
 
@@ -94,6 +95,7 @@ void _nipc_handler(const int signal)
 {
 	// Allocate a buffer to store the message.
 	nipc_message* message = static_cast<nipc_message*>(malloc(sizeof(nipc_message)));
+	//TODO: check if ptr is valid
 
 	// Receive the message from the message queue.
 	msgq_buf buf;
@@ -123,16 +125,16 @@ void _nipc_handler(const int signal)
  * @return  {const int}  `0` on success, `-1` on failure.
  */
 const int nipc_create(const key_t _key)
-{
+{// TODO: dont need to capture the value of shmid and msqid (maybe)
 	// Create a shared memory segment with the provided to store the NIPC instance ensuring that the segment does not already exist.
 	const int shmid = shmget(_key, sizeof(std::unordered_map<pid_t, long>), IPC_CREAT | IPC_EXCL | 0666); // TODO: replace 0666 with actual constants
 	// If the shared memory segment could not be created, return an error.
 	if (shmid == -1 || errno == EEXIST) return -1; //TODO: ensure that this is the correct error code
 
 	// Create a message queue with the provided key to store and manage messages ensuring that the queue does not already exist.
-	const int id = msgget(_key, IPC_CREAT | IPC_EXCL | 0666); // TODO: replace 0666 with actual constants
+	const int msgq_id = msgget(_key, IPC_CREAT | IPC_EXCL | 0666); // TODO: replace 0666 with actual constants
 	// If the message queue could not be created, return an error.
-	if (id == -1) { errno = EEXIST; return -1; } //TODO: ensure that this is the correct error code
+	if (msgq_id == -1) { errno = EEXIST; return -1; } //TODO: ensure that this is the correct error code
 
 	// Attach the shared memory segment to the address space of the creator process.
 	std::unordered_map<pid_t, long>* shm = static_cast<std::unordered_map<pid_t, long>*>(shmat(shmid, NULL, 0));
@@ -156,9 +158,9 @@ const int nipc_create(const key_t _key)
 const int nipc_get(const key_t _key)
 {
 	// Get the ID of the message queue with the provided key.  The message queue ID is used to identify the NIPC instance.
-	const int id = msgget(_key, 0666); // TODO: replace 0666 with actual constants
+	const int msgq_id = msgget(_key, 0666); // TODO: replace 0666 with actual constants
 	// If the message queue could not be found, return an error.
-	if (id == -1) { errno = ENOENT; return -1; } //TODO: ensure that this is the correct error code
+	if (msgq_id == -1) { errno = ENOENT; return -1; } //TODO: ensure that this is the correct error code
 
 	// Get the ID of the shared memory segment with the provided key.
 	const int shmid = shmget(_key, sizeof(std::unordered_map<pid_t, long>), 0666); // TODO: replace 0666 with actual constants
@@ -170,10 +172,11 @@ const int nipc_get(const key_t _key)
 	if (nipc == reinterpret_cast<std::unordered_map<pid_t, long>*>(-1)) { errno = ENOMEM; return -1; } //TODO: ensure that this is the correct error code
 
 	// Store the pointer to the shared memory segment in the subscription list such that it could be referenced via the NIPC ID.
-	_subscription_list[id] = nipc;
+	_subscription_list[msgq_id] = nipc;
+	// if (_subscription_list.find(msgq_id) != _subscription_list.end()) _subscription_list[msgq_id]->operator[](key) = new_nipc;
 
 	// Return the ID of the NIPC instance.
-	return id;
+	return msgq_id;
 }
 
 /**
@@ -193,15 +196,16 @@ const int nipc_subscribe(const int id, const long type, nipc_handler_t handler)
 	if (_subscription_list.find(id) == _subscription_list.end()) { errno = ENOENT; return -1; } //TODO: ensure that this is the correct error code
 
 	// Processes must subscribe to a valid channel.
-	else if (type <= 0) { errno = EINVAL; return -1; } //TODO: ensure that this is the correct error code
-
+	else if (type >= 0) { errno = EINVAL; return -1; } //TODO: ensure that this is the correct error code
+	
 	// Admit the process to the NIPC instance.
 	(*_subscription_list[id])[getpid()] = type;
+	//TODO: what if this kvp already exists, same issue as the parent child fork issue
 
 	// Set the signal and notification handlers
 	_handler = handler;
 	signal(SIGUSR1, _nipc_handler);
-
+	
 	// Return success.
 	return 0;
 }
@@ -220,7 +224,7 @@ const int nipc_send(const int id, const nipc_message msg, const long type)
 	// Ensure that the NIPC instance exists and the process called `nipc_get()` for this NIPC instance.
 	if (_subscription_list.find(id) == _subscription_list.end()) { errno = ENOENT; return -1; } //TODO: ensure that this is the correct error code
 
-	// Instantiate a buffer to hold the PIDs of all processes to receive this message. 
+	// Instantiate a buffer to hold the PIDs of all processes to receive this message.
 	std::vector<pid_t> mailing_list = {};
 
 	// Broadcast the message to all subscribers of the NIPC instance.
@@ -229,7 +233,7 @@ const int nipc_send(const int id, const nipc_message msg, const long type)
 
 	// Multicast the message to all subscribers of a multicast channel.
 	// Iterate over the subscription list and add the PIDs of all subscribers whose channel ID matches `type` to the mailing list.
-	else if (type < 0) { for (const std::pair<const int, long>& pair : *_subscription_list[id]) if (pair.second == -type) mailing_list.push_back(pair.first); }
+	else if (type < 0) { for (const std::pair<const pid_t, long>& pair : *_subscription_list[id]) if (pair.second == -type) mailing_list.push_back(pair.first); }
 
 	// Unicast the message to a specific subscriber process.
 	// Ensure that the process is a subscriber of the NIPC instance.
@@ -289,9 +293,9 @@ const int nipc_close(const int id)
 const int nipc_remove(const key_t _key)
 {
 	// Get the ID of the message queue with the provided key.
-	const int id = msgget(_key, 0666); // TODO: replace 0666 with actual constants
+	const int msgq_id = msgget(_key, 0666); // TODO: replace 0666 with actual constants
 	// If the message queue could not be found, return an error.
-	if (id == -1) { errno = ENOENT; return -1; } //TODO: ensure that this is the correct error code
+	if (msgq_id == -1) { errno = ENOENT; return -1; } //TODO: ensure that this is the correct error code
 
 	// Get the ID of the shared memory segment with the provided key.
 	const int shmid = shmget(_key, sizeof(std::unordered_map<pid_t, long>), 0666); // TODO: replace 0666 with actual constants
@@ -299,7 +303,7 @@ const int nipc_remove(const key_t _key)
 	if (shmid == -1) { errno = ENOENT; return -1; } //TODO: ensure that this is the correct error code
 
 	// Remove the message queue.
-	if (msgctl(id, IPC_RMID, NULL) == -1) { errno = ENOMEM; return -1; } //TODO: ensure that this is the correct error code
+	if (msgctl(msgq_id, IPC_RMID, NULL) == -1) { errno = ENOMEM; return -1; } //TODO: ensure that this is the correct error code
 	// Remove the shared memory segment.
 	if (shmctl(shmid, IPC_RMID, NULL) == -1) { errno = ENOMEM; return -1; } //TODO: ensure that this is the correct error code
 

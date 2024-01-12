@@ -16,9 +16,10 @@
 
 #include <sys/types.h>	// key_t
 
-struct nipc_message //TODO: nipc_message
+struct nipc_message //TODO: nipc_message bara=> nah keep it as is.
 {
-	char data[1024];
+	char data[256]; //not our problem.
+	// TODO: repent 
 };
 
 typedef void (*nipc_handler_t)(nipc_message* const);
